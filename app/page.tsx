@@ -180,7 +180,7 @@ export default function Home() {
   }
 
   function toggleTable(table: number) {
-    setTables((current) => current.includes(table)
+    setTables((current) => current.length === 10 ? [table] : current.includes(table)
       ? current.length === 1 ? current : current.filter((value) => value !== table)
       : [...current, table].sort((a, b) => a - b));
   }
@@ -205,7 +205,7 @@ export default function Home() {
           </div>
           <div className="table-picker">
             <div className="table-picker-title"><strong>Choose your tables</strong><button onClick={() => setTables([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])}>All tables</button></div>
-            <p>Pick one or more, for example 2s and 5s.</p>
+            <p>Tap a table to focus on it, then tap another to add it. For example: 2s and 5s.</p>
             <div className="table-grid" aria-label="Choose multiplication tables">
               {Array.from({ length: 10 }, (_, index) => index + 1).map((table) => <button key={table} className={tables.includes(table) ? "selected" : ""} onClick={() => toggleTable(table)} aria-pressed={tables.includes(table)}>{table}×</button>)}
             </div>
