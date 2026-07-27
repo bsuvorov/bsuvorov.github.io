@@ -86,6 +86,7 @@ export default function Home() {
   const nextQuestionRef = useRef<() => void>(() => {});
   const listenRef = useRef<() => void>(() => {});
   const resolvingAnswer = useRef(false);
+  const reviewQueue = useRef<Array<{ a: number; b: number }>>([]);
 
   const clearAnswerTimer = useCallback(() => {
     if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
@@ -100,6 +101,7 @@ export default function Home() {
     const skipped = isSkipResponse(heard);
     const correct = !skipped && spokenNumbers(heard).includes(a * b);
     setFacts((old) => [...old, { a, b, correct, heard }]);
+    if (!correct) reviewQueue.current.push({ a, b });
     setListening(false);
     let feedback = "";
     if (correct) {
@@ -107,7 +109,7 @@ export default function Home() {
     } else if (!heard) {
       feedback = `Time's up! ${a} times ${b} is ${a * b}.`;
     } else if (skipped) {
-      feedback = `That’s okay! ${a} times ${b} is ${a * b}.`;
+      feedback = `That one needs practice. ${a} times ${b} is ${a * b}.`;
     } else {
       feedback = `Nice try! ${a} times ${b} is ${a * b}.`;
     }
@@ -154,9 +156,10 @@ export default function Home() {
 
   const nextQuestion = useCallback(() => {
     resolvingAnswer.current = false;
-    const a = tables[Math.floor(Math.random() * tables.length)];
-    const b = Math.floor(Math.random() * 10) + 1;
-    const next = { a, b };
+    const next = reviewQueue.current.shift() ?? {
+      a: tables[Math.floor(Math.random() * tables.length)],
+      b: Math.floor(Math.random() * 10) + 1,
+    };
     questionRef.current = next;
     setQuestion(next);
     setMessage("Listen carefully…");
@@ -192,6 +195,7 @@ export default function Home() {
 
   function start() {
     setFacts([]);
+    reviewQueue.current = [];
     setTimeLeft(minutes * 60);
     setStage("playing");
     window.setTimeout(nextQuestion, 100);
@@ -206,6 +210,7 @@ export default function Home() {
   const total = facts.length;
   const correct = facts.filter((fact) => fact.correct).length;
   const missed = facts.filter((fact) => !fact.correct);
+  const mistakeTotal = missed.length;
   const needsPractice = [...new Set(missed.map((fact) => `${fact.a} × ${fact.b}`))].slice(0, 5);
   const seconds = String(timeLeft % 60).padStart(2, "0");
 
@@ -242,10 +247,10 @@ export default function Home() {
         </div>}
         {stage === "result" && <div className="results card">
           <div className="mascot" aria-hidden="true">🏆</div><p className="eyebrow">ADVENTURE COMPLETE</p>
-          <h1>Wonderful work!</h1><p className="lead">You answered {total} question{total === 1 ? "" : "s"} and got <strong>{correct}</strong> right.</p>
+          <h1>Wonderful work!</h1><p className="lead">You answered {total} question{total === 1 ? "" : "s"}, got <strong>{correct}</strong> right, and made <strong>{mistakeTotal}</strong> mistake{mistakeTotal === 1 ? "" : "s"}. Missed facts were queued to practise again.</p>
           <div className="score"><span>{total ? Math.round((correct / total) * 100) : 0}%</span><small>correct</small></div>
           {needsPractice.length ? <div className="study"><h2>Your next superpower</h2><p>Practise these facts a little more:</p><div>{needsPractice.map((fact) => <span key={fact}>{fact}</span>)}</div></div> : <div className="study all-good"><h2>You’re on a roll!</h2><p>Every answer was correct. Try a longer adventure next time!</p></div>}
-          {missed.length > 0 && <div className="mistakes"><h2>Questions to revisit</h2><div className="mistake-list">{missed.map((fact, index) => <div className="mistake" key={`${fact.a}-${fact.b}-${index}`}><span>{fact.a} × {fact.b}</span><span>{fact.heard ? `You said: “${fact.heard}”` : "No answer"}</span><strong>Answer: {fact.a * fact.b}</strong></div>)}</div></div>}
+          {missed.length > 0 && <div className="mistakes"><h2>Your {mistakeTotal} mistake{mistakeTotal === 1 ? "" : "s"}</h2><div className="mistake-list">{missed.map((fact, index) => <div className="mistake" key={`${fact.a}-${fact.b}-${index}`}><span>{fact.a} × {fact.b}</span><span>{fact.heard ? `You said: “${fact.heard}”` : "No answer"}</span><strong>Answer: {fact.a * fact.b}</strong></div>)}</div></div>}
           <button className="start" onClick={() => setStage("welcome")}>Play again <span>↻</span></button>
         </div>}
       </section>
