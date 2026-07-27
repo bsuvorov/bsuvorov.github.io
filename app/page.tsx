@@ -11,13 +11,16 @@ declare global {
   }
 }
 
+type SpeechResultLike = ArrayLike<{ transcript: string }> & { isFinal: boolean };
+
 type SpeechRecognitionLike = {
   continuous: boolean;
   interimResults: boolean;
+  maxAlternatives: number;
   lang: string;
   start: () => void;
   stop: () => void;
-  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
+  onresult: ((event: { results: ArrayLike<SpeechResultLike> }) => void) | null;
   onerror: ((event?: { error?: string }) => void) | null;
   onend: (() => void) | null;
 };
@@ -86,7 +89,8 @@ export default function Home() {
   const nextQuestionRef = useRef<() => void>(() => {});
   const listenRef = useRef<() => void>(() => {});
   const resolvingAnswer = useRef(false);
-  const reviewQueue = useRef<Array<{ a: number; b: number }>>([]);
+  const reviewQueue = useRef<Array<{ a: number; b: number; due: number }>>([]);
+  const askedCount = useRef(0);
 
   const clearAnswerTimer = useCallback(() => {
     if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
@@ -101,7 +105,7 @@ export default function Home() {
     const skipped = isSkipResponse(heard);
     const correct = !skipped && spokenNumbers(heard).includes(a * b);
     setFacts((old) => [...old, { a, b, correct, heard }]);
-    if (!correct) reviewQueue.current.push({ a, b });
+    if (!correct) reviewQueue.current.push({ a, b, due: askedCount.current + 3 });
     setListening(false);
     let feedback = "";
     if (correct) {
@@ -129,6 +133,7 @@ export default function Home() {
     recognition.current = instance;
     instance.continuous = false;
     instance.interimResults = true;
+    instance.maxAlternatives = 4;
     instance.lang = "en-US";
     let heardSoFar = "";
     const settle = (heard: string) => {
@@ -138,16 +143,22 @@ export default function Home() {
       submitAnswer(heard);
     };
     instance.onresult = (event) => {
+      const { a, b } = questionRef.current;
       let transcript = "";
       let hasFinal = false;
+      let match = "";
       for (let i = 0; i < event.results.length; i += 1) {
-        transcript += `${event.results[i][0].transcript} `;
-        if (event.results[i].isFinal) hasFinal = true;
+        const result = event.results[i];
+        transcript += `${result[0].transcript} `;
+        if (result.isFinal) hasFinal = true;
+        for (let j = 0; j < result.length && !match; j += 1) {
+          const alternative = result[j].transcript;
+          if (spokenNumbers(alternative).includes(a * b) || isSkipResponse(alternative)) match = alternative;
+        }
       }
       heardSoFar = transcript.trim();
-      const { a, b } = questionRef.current;
-      const answered = spokenNumbers(heardSoFar).includes(a * b) || isSkipResponse(heardSoFar);
-      if (answered || hasFinal) settle(heardSoFar);
+      if (match) settle(match);
+      else if (hasFinal) settle(heardSoFar);
     };
     instance.onerror = (event) => {
       if (resolvingAnswer.current) return;
@@ -174,10 +185,23 @@ export default function Home() {
 
   const nextQuestion = useCallback(() => {
     resolvingAnswer.current = false;
-    const next = reviewQueue.current.shift() ?? {
+    askedCount.current += 1;
+    const randomFact = () => ({
       a: tables[Math.floor(Math.random() * tables.length)],
       b: Math.floor(Math.random() * 10) + 1,
-    };
+    });
+    const review = reviewQueue.current[0];
+    let next: { a: number; b: number };
+    if (review && review.due <= askedCount.current) {
+      reviewQueue.current.shift();
+      next = { a: review.a, b: review.b };
+    } else {
+      const previous = questionRef.current;
+      next = randomFact();
+      for (let tries = 0; tries < 8 && next.a === previous.a && next.b === previous.b; tries += 1) {
+        next = randomFact();
+      }
+    }
     questionRef.current = next;
     setQuestion(next);
     setMessage("Listen carefully…");
@@ -214,6 +238,7 @@ export default function Home() {
   function start() {
     setFacts([]);
     reviewQueue.current = [];
+    askedCount.current = 0;
     setTimeLeft(minutes * 60);
     setStage("playing");
     window.setTimeout(nextQuestion, 100);
