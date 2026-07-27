@@ -31,18 +31,21 @@ const WORD_NUMBERS: Record<string, number> = {
   hundred: 100,
 };
 
-function spokenNumber(text: string) {
-  const direct = text.match(/\d+/)?.[0];
-  if (direct) return Number(direct);
+function spokenNumbers(text: string) {
+  const candidates = (text.match(/\d+/g) ?? []).map(Number);
   const words = text.toLowerCase().replace(/-/g, " ").match(/[a-z]+/g) ?? [];
   let total = 0;
+  const digits: number[] = [];
   for (const word of words) {
     const n = WORD_NUMBERS[word];
     if (n === undefined) continue;
+    if (n >= 0 && n <= 9) digits.push(n);
     if (n === 100) total = Math.max(1, total) * 100;
     else total += n;
   }
-  return total || null;
+  if (total || words.includes("zero")) candidates.push(total);
+  if (digits.length > 1) candidates.push(Number(digits.join("")));
+  return [...new Set(candidates)];
 }
 
 function say(text: string, afterSpeaking?: () => void) {
@@ -84,9 +87,8 @@ export default function Home() {
     if (resolvingAnswer.current) return;
     resolvingAnswer.current = true;
     clearAnswerTimer();
-    const answer = spokenNumber(heard);
     const { a, b } = questionRef.current;
-    const correct = answer === a * b;
+    const correct = spokenNumbers(heard).includes(a * b);
     setFacts((old) => [...old, { a, b, correct, heard }]);
     setListening(false);
     let feedback = "";
@@ -97,7 +99,7 @@ export default function Home() {
     } else {
       feedback = `Nice try! ${a} times ${b} is ${a * b}.`;
     }
-    setMessage(feedback);
+    setMessage(heard ? `I heard “${heard}.” ${feedback}` : feedback);
     say(feedback, () => window.setTimeout(() => nextQuestionRef.current(), 700));
   }, [clearAnswerTimer]);
 
