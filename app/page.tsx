@@ -48,16 +48,25 @@ function spokenNumbers(text: string) {
   return [...new Set(candidates)];
 }
 
+function isSkipResponse(text: string) {
+  return /\b(i\s*(do\s*)?not\s*know|i\s*don'?t\s*know|dont\s*know|do\s*not\s*know)\b/i.test(text);
+}
+
+let speechId = 0;
+
 function say(text: string, afterSpeaking?: () => void) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
     afterSpeaking?.();
     return;
   }
+  const currentSpeechId = ++speechId;
   window.speechSynthesis.cancel();
   const voice = new SpeechSynthesisUtterance(text);
   voice.rate = 0.82;
   voice.pitch = 1.12;
-  voice.onend = () => afterSpeaking?.();
+  voice.onend = () => {
+    if (currentSpeechId === speechId) afterSpeaking?.();
+  };
   window.speechSynthesis.speak(voice);
 }
 
@@ -70,7 +79,7 @@ export default function Home() {
   const [facts, setFacts] = useState<Fact[]>([]);
   const [message, setMessage] = useState("Pick a practice time, then press Start!");
   const [listening, setListening] = useState(false);
-  const [answerSeconds, setAnswerSeconds] = useState(6);
+  const [answerSeconds, setAnswerSeconds] = useState(3);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const questionRef = useRef(question);
   const answerTimer = useRef<number | null>(null);
@@ -88,7 +97,8 @@ export default function Home() {
     resolvingAnswer.current = true;
     clearAnswerTimer();
     const { a, b } = questionRef.current;
-    const correct = spokenNumbers(heard).includes(a * b);
+    const skipped = isSkipResponse(heard);
+    const correct = !skipped && spokenNumbers(heard).includes(a * b);
     setFacts((old) => [...old, { a, b, correct, heard }]);
     setListening(false);
     let feedback = "";
@@ -96,6 +106,8 @@ export default function Home() {
       feedback = "Amazing! You got it!";
     } else if (!heard) {
       feedback = `Time's up! ${a} times ${b} is ${a * b}.`;
+    } else if (skipped) {
+      feedback = `That’s okay! ${a} times ${b} is ${a * b}.`;
     } else {
       feedback = `Nice try! ${a} times ${b} is ${a * b}.`;
     }
@@ -119,20 +131,23 @@ export default function Home() {
     instance.onresult = (event) => submitAnswer(event.results[0][0].transcript);
     instance.onerror = (event) => {
       if (resolvingAnswer.current) return;
-      clearAnswerTimer();
-      setListening(false);
-      setMessage(event?.error === "not-allowed" ? "Please allow microphone access, then try again." : "I didn’t catch that. Let’s try a new question!");
-      if (event?.error !== "not-allowed") window.setTimeout(() => nextQuestionRef.current(), 800);
+      if (event?.error === "not-allowed") {
+        clearAnswerTimer();
+        setListening(false);
+        setMessage("Please allow microphone access, then try again.");
+        return;
+      }
+      submitAnswer("");
     };
     instance.onend = () => setListening(false);
-    setAnswerSeconds(6);
+    setAnswerSeconds(3);
     setListening(true);
-    setMessage("I’m listening… you have 6 seconds!");
+    setMessage("I’m listening… you have 3 seconds!");
     instance.start();
     answerTimer.current = window.setTimeout(() => {
       instance.stop();
       submitAnswer("");
-    }, 6000);
+    }, 3000);
   }, [clearAnswerTimer, submitAnswer]);
 
   listenRef.current = listen;
@@ -151,6 +166,7 @@ export default function Home() {
   nextQuestionRef.current = nextQuestion;
 
   const finish = useCallback(() => {
+    speechId += 1;
     clearAnswerTimer();
     recognition.current?.stop();
     window.speechSynthesis?.cancel();
@@ -219,6 +235,7 @@ export default function Home() {
           <div className="practice-top"><div><p className="eyebrow">QUESTION {total + 1}</p><p className="cheer">Keep going, star!</p></div><div className="timer">⏱ {Math.floor(timeLeft / 60)}:{seconds}</div></div>
           <div className="problem"><span>{question.a}</span><b>×</b><span>{question.b}</span><b>=</b><i>?</i></div>
           <p className="prompt">{message}{listening && <span className="answer-countdown"> {answerSeconds}</span>}</p>
+          {listening && <div className="answer-progress" aria-label={`${answerSeconds} seconds remaining`}><span style={{ width: `${(answerSeconds / 3) * 100}%` }} /></div>}
           <button className={`mic ${listening ? "listening" : ""}`} onClick={listen} aria-label="Answer with your voice">{listening ? "◉" : "🎙"}</button>
           <button className="repeat" onClick={() => say(`${question.a} multiplied by ${question.b}. What is the answer?`, listen)}>🔊 Hear it again</button>
           <button className="finish" onClick={finish}>Finish early</button>
