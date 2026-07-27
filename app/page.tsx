@@ -18,7 +18,7 @@ type SpeechRecognitionLike = {
   start: () => void;
   stop: () => void;
   onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event?: { error?: string }) => void) | null;
   onend: (() => void) | null;
 };
 
@@ -45,42 +45,116 @@ function spokenNumber(text: string) {
   return total || null;
 }
 
-function say(text: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+function say(text: string, afterSpeaking?: () => void) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    afterSpeaking?.();
+    return;
+  }
   window.speechSynthesis.cancel();
   const voice = new SpeechSynthesisUtterance(text);
   voice.rate = 0.82;
   voice.pitch = 1.12;
+  voice.onend = () => afterSpeaking?.();
   window.speechSynthesis.speak(voice);
 }
 
 export default function Home() {
   const [minutes, setMinutes] = useState(5);
+  const [tables, setTables] = useState<number[]>([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   const [stage, setStage] = useState<"welcome" | "playing" | "result">("welcome");
   const [timeLeft, setTimeLeft] = useState(0);
   const [question, setQuestion] = useState({ a: 5, b: 7 });
   const [facts, setFacts] = useState<Fact[]>([]);
   const [message, setMessage] = useState("Pick a practice time, then press Start!");
   const [listening, setListening] = useState(false);
+  const [answerSeconds, setAnswerSeconds] = useState(6);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const questionRef = useRef(question);
+  const answerTimer = useRef<number | null>(null);
+  const nextQuestionRef = useRef<() => void>(() => {});
+  const listenRef = useRef<() => void>(() => {});
+  const resolvingAnswer = useRef(false);
+
+  const clearAnswerTimer = useCallback(() => {
+    if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
+    answerTimer.current = null;
+  }, []);
+
+  const submitAnswer = useCallback((heard: string) => {
+    if (resolvingAnswer.current) return;
+    resolvingAnswer.current = true;
+    clearAnswerTimer();
+    const answer = spokenNumber(heard);
+    const { a, b } = questionRef.current;
+    const correct = answer === a * b;
+    setFacts((old) => [...old, { a, b, correct, heard }]);
+    setListening(false);
+    let feedback = "";
+    if (correct) {
+      feedback = "Amazing! You got it!";
+    } else if (!heard) {
+      feedback = `Time's up! ${a} times ${b} is ${a * b}.`;
+    } else {
+      feedback = `Nice try! ${a} times ${b} is ${a * b}.`;
+    }
+    setMessage(feedback);
+    say(feedback, () => window.setTimeout(() => nextQuestionRef.current(), 700));
+  }, [clearAnswerTimer]);
+
+  const listen = useCallback(() => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setMessage("Voice listening is not available here. Try Chrome or Safari.");
+      return;
+    }
+    clearAnswerTimer();
+    recognition.current?.stop();
+    const instance = new Recognition();
+    recognition.current = instance;
+    instance.continuous = false;
+    instance.interimResults = false;
+    instance.lang = "en-US";
+    instance.onresult = (event) => submitAnswer(event.results[0][0].transcript);
+    instance.onerror = (event) => {
+      if (resolvingAnswer.current) return;
+      clearAnswerTimer();
+      setListening(false);
+      setMessage(event?.error === "not-allowed" ? "Please allow microphone access, then try again." : "I didn’t catch that. Let’s try a new question!");
+      if (event?.error !== "not-allowed") window.setTimeout(() => nextQuestionRef.current(), 800);
+    };
+    instance.onend = () => setListening(false);
+    setAnswerSeconds(6);
+    setListening(true);
+    setMessage("I’m listening… you have 6 seconds!");
+    instance.start();
+    answerTimer.current = window.setTimeout(() => {
+      instance.stop();
+      submitAnswer("");
+    }, 6000);
+  }, [clearAnswerTimer, submitAnswer]);
+
+  listenRef.current = listen;
 
   const nextQuestion = useCallback(() => {
-    const a = Math.floor(Math.random() * 10) + 1;
+    resolvingAnswer.current = false;
+    const a = tables[Math.floor(Math.random() * tables.length)];
     const b = Math.floor(Math.random() * 10) + 1;
     const next = { a, b };
     questionRef.current = next;
     setQuestion(next);
-    setMessage("Your turn — say the answer!");
-    window.setTimeout(() => say(`${a} multiplied by ${b}. What is the answer?`), 250);
-  }, []);
+    setMessage("Listen carefully…");
+    window.setTimeout(() => say(`${a} multiplied by ${b}. What is the answer?`, () => listenRef.current()), 100);
+  }, [tables]);
+
+  nextQuestionRef.current = nextQuestion;
 
   const finish = useCallback(() => {
+    clearAnswerTimer();
     recognition.current?.stop();
     window.speechSynthesis?.cancel();
     setListening(false);
     setStage("result");
-  }, []);
+  }, [clearAnswerTimer]);
 
   useEffect(() => {
     if (stage !== "playing" || timeLeft <= 0) return;
@@ -92,47 +166,23 @@ export default function Home() {
     if (stage === "playing" && timeLeft === 0) finish();
   }, [timeLeft, stage, finish]);
 
-  const submitAnswer = useCallback((heard: string) => {
-    const answer = spokenNumber(heard);
-    const { a, b } = questionRef.current;
-    const correct = answer === a * b;
-    setFacts((old) => [...old, { a, b, correct, heard }]);
-    setListening(false);
-    if (correct) {
-      setMessage("Amazing! You got it!");
-      say("Amazing! You got it!");
-    } else {
-      setMessage(`Nice try! ${a} times ${b} is ${a * b}.`);
-      say(`Nice try! ${a} times ${b} is ${a * b}.`);
-    }
-    window.setTimeout(nextQuestion, 1500);
-  }, [nextQuestion]);
-
-  const listen = useCallback(() => {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      setMessage("Voice listening is not available here. Try Chrome or Safari, then use the answer buttons below.");
-      return;
-    }
-    recognition.current?.stop();
-    const instance = new Recognition();
-    recognition.current = instance;
-    instance.continuous = false;
-    instance.interimResults = false;
-    instance.lang = "en-US";
-    instance.onresult = (event) => submitAnswer(event.results[0][0].transcript);
-    instance.onerror = () => { setListening(false); setMessage("I didn’t catch that. Tap the microphone and try again!"); };
-    instance.onend = () => setListening(false);
-    setListening(true);
-    setMessage("I’m listening… say your answer!");
-    instance.start();
-  }, [submitAnswer]);
+  useEffect(() => {
+    if (!listening) return;
+    const clock = window.setInterval(() => setAnswerSeconds((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(clock);
+  }, [listening]);
 
   function start() {
     setFacts([]);
     setTimeLeft(minutes * 60);
     setStage("playing");
     window.setTimeout(nextQuestion, 100);
+  }
+
+  function toggleTable(table: number) {
+    setTables((current) => current.includes(table)
+      ? current.length === 1 ? current : current.filter((value) => value !== table)
+      : [...current, table].sort((a, b) => a - b));
   }
 
   const total = facts.length;
@@ -153,15 +203,22 @@ export default function Home() {
           <div className="time-picker" aria-label="Choose practice time">
             {[5, 10].map((time) => <button key={time} className={minutes === time ? "selected" : ""} onClick={() => setMinutes(time)}>{time} minutes</button>)}
           </div>
+          <div className="table-picker">
+            <div className="table-picker-title"><strong>Choose your tables</strong><button onClick={() => setTables([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])}>All tables</button></div>
+            <p>Pick one or more, for example 2s and 5s.</p>
+            <div className="table-grid" aria-label="Choose multiplication tables">
+              {Array.from({ length: 10 }, (_, index) => index + 1).map((table) => <button key={table} className={tables.includes(table) ? "selected" : ""} onClick={() => toggleTable(table)} aria-pressed={tables.includes(table)}>{table}×</button>)}
+            </div>
+          </div>
           <button className="start" onClick={start}>Start my adventure <span>→</span></button>
-          <p className="tiny">Best with your sound on. You can tap the microphone whenever you’re ready to answer.</p>
+          <p className="tiny">Best with your sound on. The microphone will switch on after every question.</p>
         </div>}
         {stage === "playing" && <div className="practice card">
           <div className="practice-top"><div><p className="eyebrow">QUESTION {total + 1}</p><p className="cheer">Keep going, star!</p></div><div className="timer">⏱ {Math.floor(timeLeft / 60)}:{seconds}</div></div>
           <div className="problem"><span>{question.a}</span><b>×</b><span>{question.b}</span><b>=</b><i>?</i></div>
-          <p className="prompt">{message}</p>
+          <p className="prompt">{message}{listening && <span className="answer-countdown"> {answerSeconds}</span>}</p>
           <button className={`mic ${listening ? "listening" : ""}`} onClick={listen} aria-label="Answer with your voice">{listening ? "◉" : "🎙"}</button>
-          <button className="repeat" onClick={() => say(`${question.a} multiplied by ${question.b}. What is the answer?`)}>🔊 Hear it again</button>
+          <button className="repeat" onClick={() => say(`${question.a} multiplied by ${question.b}. What is the answer?`, listen)}>🔊 Hear it again</button>
           <button className="finish" onClick={finish}>Finish early</button>
         </div>}
         {stage === "result" && <div className="results card">
@@ -169,6 +226,7 @@ export default function Home() {
           <h1>Wonderful work!</h1><p className="lead">You answered {total} question{total === 1 ? "" : "s"} and got <strong>{correct}</strong> right.</p>
           <div className="score"><span>{total ? Math.round((correct / total) * 100) : 0}%</span><small>correct</small></div>
           {needsPractice.length ? <div className="study"><h2>Your next superpower</h2><p>Practise these facts a little more:</p><div>{needsPractice.map((fact) => <span key={fact}>{fact}</span>)}</div></div> : <div className="study all-good"><h2>You’re on a roll!</h2><p>Every answer was correct. Try a longer adventure next time!</p></div>}
+          {missed.length > 0 && <div className="mistakes"><h2>Questions to revisit</h2><div className="mistake-list">{missed.map((fact, index) => <div className="mistake" key={`${fact.a}-${fact.b}-${index}`}><span>{fact.a} × {fact.b}</span><span>{fact.heard ? `You said: “${fact.heard}”` : "No answer"}</span><strong>Answer: {fact.a * fact.b}</strong></div>)}</div></div>}
           <button className="start" onClick={() => setStage("welcome")}>Play again <span>↻</span></button>
         </div>}
       </section>
