@@ -17,7 +17,7 @@ type SpeechRecognitionLike = {
   lang: string;
   start: () => void;
   stop: () => void;
-  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
+  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
   onerror: ((event?: { error?: string }) => void) | null;
   onend: (() => void) | null;
 };
@@ -33,7 +33,7 @@ const WORD_NUMBERS: Record<string, number> = {
 
 function spokenNumbers(text: string) {
   const candidates = (text.match(/\d+/g) ?? []).map(Number);
-  const words = text.toLowerCase().replace(/-/g, " ").match(/[a-z]+/g) ?? [];
+  const words: string[] = text.toLowerCase().replace(/-/g, " ").match(/[a-z]+/g) ?? [];
   let total = 0;
   const digits: number[] = [];
   for (const word of words) {
@@ -128,9 +128,27 @@ export default function Home() {
     const instance = new Recognition();
     recognition.current = instance;
     instance.continuous = false;
-    instance.interimResults = false;
+    instance.interimResults = true;
     instance.lang = "en-US";
-    instance.onresult = (event) => submitAnswer(event.results[0][0].transcript);
+    let heardSoFar = "";
+    const settle = (heard: string) => {
+      instance.onresult = null;
+      instance.onerror = null;
+      instance.stop();
+      submitAnswer(heard);
+    };
+    instance.onresult = (event) => {
+      let transcript = "";
+      let hasFinal = false;
+      for (let i = 0; i < event.results.length; i += 1) {
+        transcript += `${event.results[i][0].transcript} `;
+        if (event.results[i].isFinal) hasFinal = true;
+      }
+      heardSoFar = transcript.trim();
+      const { a, b } = questionRef.current;
+      const answered = spokenNumbers(heardSoFar).includes(a * b) || isSkipResponse(heardSoFar);
+      if (answered || hasFinal) settle(heardSoFar);
+    };
     instance.onerror = (event) => {
       if (resolvingAnswer.current) return;
       if (event?.error === "not-allowed") {
@@ -139,7 +157,7 @@ export default function Home() {
         setMessage("Please allow microphone access, then try again.");
         return;
       }
-      submitAnswer("");
+      settle(heardSoFar);
     };
     instance.onend = () => setListening(false);
     setAnswerSeconds(3);
@@ -148,7 +166,7 @@ export default function Home() {
     instance.start();
     answerTimer.current = window.setTimeout(() => {
       instance.stop();
-      submitAnswer("");
+      answerTimer.current = window.setTimeout(() => settle(heardSoFar), 500);
     }, 3000);
   }, [clearAnswerTimer, submitAnswer]);
 
@@ -163,7 +181,7 @@ export default function Home() {
     questionRef.current = next;
     setQuestion(next);
     setMessage("Listen carefully…");
-    window.setTimeout(() => say(`${a} multiplied by ${b}. What is the answer?`, () => listenRef.current()), 100);
+    window.setTimeout(() => say(`${next.a} multiplied by ${next.b}. What is the answer?`, () => listenRef.current()), 100);
   }, [tables]);
 
   nextQuestionRef.current = nextQuestion;
